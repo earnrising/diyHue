@@ -27,6 +27,7 @@ class Light():
         self.streaming = False
         self.dynamics = deepcopy(lightTypes[self.modelid]["dynamics"])
         self.effect = "no_effect"
+        self.function = data["function"] if "function" in data else "mixed"
 
         # entertainment
         streamMessage = {"creationtime": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -111,7 +112,7 @@ class Light():
                 setattr(self, key, updateAttribute)
             else:
                 setattr(self, key, value)
-        streamMessage = {"creationtime": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "data": [self.getDevice()],
                          "id": str(uuid.uuid4()),
                          "type": "update"
@@ -164,6 +165,8 @@ class Light():
                         self.config[key] = value
                 if key == "name":
                     self.name = value
+                if key == "function":
+                    self.function = value
             if "bri" in state:
                 if "min_bri" in self.protocol_cfg and self.protocol_cfg["min_bri"] > state["bri"]:
                     state["bri"] = self.protocol_cfg["min_bri"]
@@ -195,19 +198,26 @@ class Light():
                 v1State["archetype"] = state["metadata"]["archetype"]
             if "name" in state["metadata"]:
                 v1State["name"] = state["metadata"]["name"]
+            if "function" in state["metadata"]:
+                v1State["function"] = state["metadata"]["function"]
         self.setV1State(v1State, advertise=False)
         self.genStreamEvent(state)
 
     def genStreamEvent(self, v2State):
         streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                         "data": [{"id": self.id_v2, "type": "light"}],
+                         "data": [{"id": self.id_v2,"id_v1": "/lights/" + self.id_v1, "type": "light"}],
                          "id": str(uuid.uuid4()),
                          "type": "update"
                          }
-        streamMessage["id_v1"] = "/lights/" + self.id_v1
         streamMessage["data"][0].update(v2State)
-        streamMessage["data"][0].update(
-            {"owner": {"rid": self.getDevice()["id"], "rtype": "device"}})
+        streamMessage["data"][0].update({"owner": {"rid": self.getDevice()["id"], "rtype": "device"}})
+        streamMessage["data"][0].update({"service_id": self.protocol_cfg["light_nr"]-1 if "light_nr" in self.protocol_cfg else 0})
+        StreamEvent(streamMessage)
+        streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         "data": [self.getDevice()],
+                         "id": str(uuid.uuid4()),
+                         "type": "update"
+                         }
         StreamEvent(streamMessage)
 
     def getDevice(self):
@@ -221,7 +231,7 @@ class Light():
         }
         result["product_data"] = lightTypes[self.modelid]["device"]
         result["product_data"]["model_id"] = self.modelid
-
+        result["service_id"] = self.protocol_cfg["light_nr"]-1 if "light_nr" in self.protocol_cfg else 0
         result["services"] = [
             {
                 "rid": self.id_v2,
@@ -317,22 +327,23 @@ class Light():
             result["dimming_delta"] = {}
         result["dynamics"] = self.dynamics
         result["effects"] = {
-        "effect_values": [
-            "no_effect",
-            "candle",
-            "fire"
-        ],
-        "status": "no_effect",
-        "status_values": [
-            "no_effect",
-            "candle",
-            "fire"
-        ]
-    }
+            "effect_values": [
+                "no_effect",
+                "candle",
+                "fire"
+            ],
+            "status": "no_effect",
+            "status_values": [
+                "no_effect",
+                "candle",
+                "fire"
+            ]
+        }
+        result["timed_effects"] = {}
         result["identify"] = {}
         result["id"] = self.id_v2
         result["id_v1"] = "/lights/" + self.id_v1
-        result["metadata"] = {"name": self.name, "function": "mixed",
+        result["metadata"] = {"name": self.name, "function": self.function,
                               "archetype": archetype[self.config["archetype"]]}
         result["mode"] = "normal"
         if "mode" in self.state and self.state["mode"] == "streaming":
@@ -348,6 +359,8 @@ class Light():
         result["signaling"] = {"signal_values": [
             "no_signal",
             "on_off"]}
+        result["powerup"] = {"preset": "last_on_state"}
+        result["service_id"] = self.protocol_cfg["light_nr"]-1 if "light_nr" in self.protocol_cfg else 0
         result["type"] = "light"
         return result
 
@@ -473,6 +486,6 @@ class Light():
         logging.debug("Dynamic Scene " + self.name + " stopped.")
 
     def save(self):
-        result = {"id_v2": self.id_v2, "name": self.name, "modelid": self.modelid, "uniqueid": self.uniqueid,
+        result = {"id_v2": self.id_v2, "name": self.name, "modelid": self.modelid, "uniqueid": self.uniqueid, "function": self.function,
                   "state": self.state, "config": self.config, "protocol": self.protocol, "protocol_cfg": self.protocol_cfg}
         return result

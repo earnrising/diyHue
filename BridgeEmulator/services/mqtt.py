@@ -14,6 +14,7 @@ from sensors.discover import addHueMotionSensor
 from sensors.sensor_types import sensorTypes
 from lights.discover import addNewLight
 from functions.rules import rulesProcessor
+from functions.behavior_instance import checkBehaviorInstances
 import requests
 
 logging = logManager.logger.get_logger(__name__)
@@ -206,6 +207,7 @@ def longPressButton(sensor, buttonevent):
         current_time =  datetime.now()
         sensor.dxState["lastupdated"] = current_time
         rulesProcessor(sensor, current_time)
+        checkBehaviorInstances(sensor)
         sleep(0.5)
     return
 
@@ -338,17 +340,17 @@ def on_message(client, userdata, msg):
                             device.config["battery"] = data["battery"]
                         if device.config["on"] == False:
                             return
-                        convertedPayload = {"lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
+                        convertedPayload = {"lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
                         if ("action" in data and data["action"] == "") or ("click" in data and data["click"] == ""):
                             return
                         ### If is a motion sensor update the light level and temperature
                         if device.modelid in motionSensors:
                             convertedPayload["presence"] = data["occupancy"]
-                            lightPayload = {"lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
+                            lightPayload = {"lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
                             lightSensor = findLightSensor(device)
                             if "temperature" in data:
                                 tempSensor = findTempSensor(device)
-                                tempSensor.state = {"temperature": int(data["temperature"] * 100), "lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
+                                tempSensor.state = {"temperature": int(data["temperature"] * 100), "lastupdated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
                             if "illuminance_lux" in data:
                                 hue_lightlevel = int(10000 * math.log10(data["illuminance_lux"])) if data["illuminance_lux"] != 0 else 0
                                 if hue_lightlevel > lightSensor.config["tholddark"]:
@@ -384,6 +386,7 @@ def on_message(client, userdata, msg):
                         if "buttonevent" in  convertedPayload and convertedPayload["buttonevent"] in [1001, 2001, 3001, 4001, 5001]:
                             Thread(target=longPressButton, args=[device, convertedPayload["buttonevent"]]).start()
                         rulesProcessor(device, current_time)
+                        checkBehaviorInstances(device)
                     elif device.getObjectPath()["resource"] == "lights":
                         state = {"reachable": True}
                         v2State = {}
