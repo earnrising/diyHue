@@ -4,7 +4,7 @@ import json
 import random
 from time import sleep
 from threading import Thread
-from datetime import datetime, timedelta, time, date, timezone
+from datetime import datetime, timedelta, time, timezone
 from functions.request import sendRequest
 from functions.daylightSensor import daylightSensor
 from functions.scripts import findGroup, triggerScript
@@ -40,6 +40,7 @@ def runScheduler():
                             logging.info("execute timmer: " + schedule + " withe delay " + str(delay))
                             sendRequest(obj.command["address"], obj.command["method"], json.dumps(obj.command["body"]), 1, delay)
                             obj.status = "disabled"
+                            configManager.bridgeConfig.mark_dirty("schedules")
                     elif schedule_time.startswith("R/PT"):
                         timmer = schedule_time[4:]
                         (h, m, s) = timmer.split(':')
@@ -47,6 +48,7 @@ def runScheduler():
                         if obj.starttime == (datetime.now(timezone.utc).replace(tzinfo=None) - d).replace(microsecond=0).isoformat():
                             logging.info("execute timmer: " + schedule + " withe delay " + str(delay))
                             obj.starttime = datetime.now(timezone.utc).replace(tzinfo=None).replace(microsecond=0).isoformat()
+                            configManager.bridgeConfig.mark_dirty("schedules")
                             sendRequest(obj.command["address"], obj.command["method"], json.dumps(obj.command["body"]), 1, delay)
                     else:
                         if schedule_time == datetime.now().strftime("%Y-%m-%dT%H:%M:%S"):
@@ -90,6 +92,17 @@ def runScheduler():
                         if "recurrence_days" in  obj.configuration["when_extended"]:
                             if datetime.now().strftime("%A").lower() not in obj.configuration["when_extended"]["recurrence_days"]:
                                 continue
+                        if obj.active:
+                            if "end_at" in obj.configuration["when_extended"] and "time_point" in obj.configuration["when_extended"]["end_at"] and obj.configuration["when_extended"]["end_at"]["time_point"]["type"] == "time":
+                                triggerTime = obj.configuration["when_extended"]["end_at"]["time_point"]["time"]
+                                time_object = time(
+                                    hour = triggerTime["hour"],
+                                    minute = triggerTime["minute"],
+                                    second = triggerTime["second"] if "second" in triggerTime else 0)
+                                if datetime.now().second == time_object.second and datetime.now().minute == time_object.minute and datetime.now().hour == time_object.hour:
+                                    logging.info("end routine: " + obj.name)
+                                    Thread(target=triggerScript, args=[obj]).start()
+                        else:
                             if "start_at" in obj.configuration["when_extended"] and "time_point" in obj.configuration["when_extended"]["start_at"] and obj.configuration["when_extended"]["start_at"]["time_point"]["type"] == "time":
                                 triggerTime = obj.configuration["when_extended"]["start_at"]["time_point"]["time"]
                                 time_object = time(
@@ -97,8 +110,13 @@ def runScheduler():
                                     minute = triggerTime["minute"],
                                     second = triggerTime["second"] if "second" in triggerTime else 0)
                                 if datetime.now().second == time_object.second and datetime.now().minute == time_object.minute and datetime.now().hour == time_object.hour:
-                                    logging.info("execute timmer: " + obj.name)
+                                    logging.info("execute routine: " + obj.name)
                                     Thread(target=triggerScript, args=[obj]).start()
+                    elif "duration" in obj.configuration:
+                        if obj.active == False and obj.enabled == True:
+                            logging.info("execute timer: " + obj.name)
+                            obj.active = True
+                            Thread(target=triggerScript, args=[obj]).start()
 
 
             except Exception as e:
@@ -139,6 +157,7 @@ def runScheduler():
                             active_timeslot = slot["start_time"]["instance"]
                     if obj.active_timeslot != active_timeslot:
                         obj.active_timeslot = active_timeslot
+                        configManager.bridgeConfig.mark_dirty("smart_scene")
                         if obj.state == "active":
                             if active_timeslot == len(obj.timeslots)-1:
                                 logging.info("stop smart_scene: " + obj.name)
@@ -160,9 +179,22 @@ def runScheduler():
             updateManager.githubCheck()
             if (bridgeConfig["config"]["swupdate2"]["autoinstall"]["on"] == True): #install update if available every day at updatetime
                 updateManager.githubInstall()
-        if (datetime.now().strftime("%M:%S") == "00:10"): #auto save configuration every hour
-            configManager.bridgeConfig.save_config()
+        # Dirty-flag save (every tick, non-blocking — rapid persistence for marked changes)
+        configManager.bridgeConfig.save_dirty_if_needed()
+
+        # Periodic full save every 15 minutes (catches background-thread mutations without dirty marks)
+        now = datetime.now()
+        if now.strftime("%M") in ["00", "15", "30", "45"] and now.strftime("%S") == "10":
+            try:
+                configManager.bridgeConfig.save_config(backup=False)
+            except Exception as e:
+                logging.error(f"Periodic full save failed: {e}")
             Thread(target=daylightSensor, args=[bridgeConfig["config"]["timezone"], bridgeConfig["sensors"]["1"]]).start()
-            if (datetime.now().strftime("%H") == "23" and datetime.now().strftime("%A") == "Sunday"): #backup config every Sunday at 23:00:10
+
+        # Weekly backup at Sunday 23:00:10
+        if now.strftime("%H:%M:%S") == "23:00:10" and now.strftime("%A") == "Sunday":
+            try:
                 configManager.bridgeConfig.save_config(backup=True)
+            except Exception as e:
+                logging.error(f"Weekly backup failed: {e}")
         sleep(1)

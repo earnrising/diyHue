@@ -1,7 +1,6 @@
 import logManager
 import json
 import time
-import random
 import threading
 from ws4py.client.threadedclient import WebSocketClient
 
@@ -129,7 +128,7 @@ class HomeAssistantClient(WebSocketClient):
         color_from_hsv = False
         for key, value in data.items():
             if key == "ct":
-                service_data['color_temp'] = value
+                service_data['color_temp_kelvin'] = 1000000 / value
             if key == "bri":
                 service_data['brightness'] = value
             if key == "xy":
@@ -297,14 +296,19 @@ def discover(detectedLights):
         supported_colourmodes = ha_state.get('attributes', {}).get('supported_color_modes', [])
 
         model_id = None
-        if HS in supported_colourmodes or XY in supported_colourmodes or RGB in supported_colourmodes or RGBW in supported_colourmodes or RGBWW in supported_colourmodes:
+        if HS in supported_colourmodes or XY in supported_colourmodes or RGB in supported_colourmodes or RGBW in supported_colourmodes or RGBWW in supported_colourmodes and COLOR_TEMP in supported_colourmodes:
             model_id = "LCT015"
         elif COLOR_TEMP in supported_colourmodes:
             model_id = "LTW001"
+        elif XY in supported_colourmodes:
+            model_id = "LLC010"
         elif BRIGHTNESS in supported_colourmodes:
             model_id = "LWB010"
-        else:
+        elif ONOFF in supported_colourmodes and not BRIGHTNESS in supported_colourmodes:
             model_id = "LOM001"
+        else:
+            logging.info("unknown model id " + str(supported_colourmodes))
+            continue
 
         protocol_cfg = {"entity_id": entity_id,
                         "ip": "none"}

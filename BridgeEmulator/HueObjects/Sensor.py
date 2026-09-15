@@ -50,6 +50,7 @@ class Sensor():
         self.swversion = data["swversion"] if "swversion" in data else None
         self.recycle = data["recycle"] if "recycle" in data else False
         self.uniqueid = data["uniqueid"] if "uniqueid" in data else None
+        self.parent_id_v2 = data["parent_id_v2"] if "parent_id_v2" in data else None
         if self.getDevice() != None:
             streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                              "data": [{"id": self.id_v2, "type": "device"}],
@@ -78,9 +79,9 @@ class Sensor():
             if self.type == "ZLLPresence":
                 rtype = "motion"
             elif self.type == "ZLLLightLevel":
-                rtype = "temperature"
-            elif self.type == "ZLLTemperature":
                 rtype = "light_level"
+            elif self.type == "ZLLTemperature":
+                rtype = "temperature"
             return {
                 "rid": self.id_v2,
                 "rtype": rtype
@@ -155,6 +156,7 @@ class Sensor():
             result["type"] = "device"
         elif self.modelid == "RWL022" or self.modelid == "RWL021" or self.modelid == "RWL020":
             result = {"id": self.id_v2, "id_v1": "/sensors/" + self.id_v1, "type": "device"}
+            result["identify"] = {}
             result["product_data"] = {"model_id": self.modelid,
                 "manufacturer_name": "Signify Netherlands B.V.",
                 "product_name": "Hue dimmer switch",
@@ -189,6 +191,7 @@ class Sensor():
             result["type"] = "device"
         elif self.modelid == "RDM002" and self.type != "ZLLRelativeRotary":
             result = {"id": self.id_v2, "id_v1": "/sensors/" + self.id_v1, "type": "device"}
+            result["identify"] = {}
             result["product_data"] = {"model_id": self.modelid,
                 "manufacturer_name": "Signify Netherlands B.V.",
                 "product_name": "Hue tap dial switch",
@@ -214,6 +217,9 @@ class Sensor():
                 "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'button4')),
                 "rtype": "button"
                 }, {
+                "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'relative_rotary')),
+                "rtype": "relative_rotary"
+                }, {
                 "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'device_power')),
                 "rtype": "device_power"
                 }, {
@@ -222,57 +228,79 @@ class Sensor():
                 }]
             result["type"] = "device"
         elif self.modelid == "RDM002" and self.type == "ZLLRelativeRotary":
-            result = {"id": self.id_v2, "id_v1": "/sensors/" + self.id_v1, "type": "device"}
-            result["product_data"] = {"model_id": self.modelid,
-                "manufacturer_name": "Signify Netherlands B.V.",
-                "product_name": "Hue tap dial switch",
-                "product_archetype": "unknown_archetype",
-                "certified": True,
-                "software_version": "2.59.25",
-                "hardware_platform_type": "100b-119"
-            }
-            result["metadata"] = {
-                "archetype": "unknown_archetype",
-                "name": self.name
-            }
-            result["services"] = [{
-                "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'button3')),
-                "rtype": "button"
-                }, {
-                "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'button4')),
-                "rtype": "button"
-                }, {
-                "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'device_power')),
-                "rtype": "device_power"
-                }, {
-                "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'zigbee_connectivity')),
-                "rtype": "zigbee_connectivity"
-                }]
-            result["type"] = "device"
+            pass  # ZLLRelativeRotary is part of the ZLLSwitch device, not a separate device
         return result
 
     def getMotion(self):
         result = None
         if self.modelid == "SML001" and self.type == "ZLLPresence":
-            result = {"enabled": self.config["on"],
-                      "id": str(uuid.uuid5(
-                          uuid.NAMESPACE_URL, self.id_v2 + 'motion')),
-                      "id_v1": "/sensors/" + self.id_v1,
-                      "motion": {
-                "motion": True if self.state["presence"] else False,
-                "motion_valid": True
-            },
+            result = {
+                "enabled": self.config["on"],
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'motion')),
+                "id_v1": "/sensors/" + self.id_v1,
+                "motion": {
+                    "motion_report": {
+                        "changed": self.state["lastupdated"],
+                        "motion": True if self.state["presence"] else False,
+                    }
+                },
+                "sensitivity": {
+                    "status": "set",
+                    "sensitivity": 2,
+                    "sensitivity_max": 2
+                },
                 "owner": {
-                "rid": str(uuid.uuid5(
-                    uuid.NAMESPACE_URL, self.id_v2 + 'device')),
-                "rtype": "device"
-            },
+                    "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'device')),
+                    "rtype": "device"
+                },
                 "type": "motion"}
+        return result
+    
+    def getTemperature(self):
+        result = None
+        if self.modelid == "SML001" and self.type == "ZLLTemperature":
+            result = {
+                "enabled": self.config["on"],
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'temperature')),
+                "id_v1": "/sensors/" + self.id_v1,
+                "temperature": {
+                    "temperature_report":{
+                        "changed": self.state["lastupdated"],
+                        "temperature": self.state["temperature"]/100 if type(self.state["temperature"]) == int else self.state["temperature"]
+                    }
+                },
+                "owner": {
+                    "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'device')),
+                    "rtype": "device"
+                },
+                "type": "temperature"}
+        return result
+    
+    def getLightlevel(self):
+        result = None
+        if self.modelid == "SML001" and self.type == "ZLLLightLevel":
+            result = {
+                "enabled": self.config["on"],
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'light_level')),
+                "id_v1": "/sensors/" + self.id_v1,
+                "light": {
+                    "light_level_report":{
+                        "changed": self.state["lastupdated"],
+                        "light_level": self.state["lightlevel"]
+                    }
+                },
+                "owner": {
+                    "rid": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'device')),
+                    "rtype": "device"
+                },
+                "type": "light_level"}
         return result
 
     def getZigBee(self):
         result = None
         if self.modelid == "SML001" and self.type != "ZLLPresence":
+            return None
+        if self.type == "ZLLRelativeRotary":
             return None
         if not self.uniqueid:
             return None
@@ -286,28 +314,45 @@ class Sensor():
             }
         result["type"] = "zigbee_connectivity"
         result["mac_address"] = self.uniqueid[:23]
-        result["status"] = "connected"
+        result["status"] = "connected" if self.config.get("reachable", True) else "connectivity_issue"
         return result
     
     def getButtons(self):
+        _BUTTONEVENT_TO_EVENT = {0: "initial_press", 1: "repeat", 2: "short_release", 3: "long_release", 10: "long_press"}
         result = []
         if self.modelid == "RWL022" or self.modelid == "RWL021" or self.modelid == "RWL020" or self.modelid == "RDM002" and self.type != "ZLLRelativeRotary":
+            buttonevent = self.state.get("buttonevent")
             for button in range(4):
+                button_number = button + 1
+                if buttonevent is not None and 1000 * button_number <= buttonevent < 1000 * (button_number + 1):
+                    last_digit = buttonevent % 1000
+                    event = _BUTTONEVENT_TO_EVENT.get(last_digit, "initial_press")
+                else:
+                    event = "initial_press"
                 result.append({
-                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'button' + str(button + 1))),
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'button' + str(button_number))),
                 "id_v1": "/sensors/" + self.id_v1,
                 "owner": {
                   "rid": self.id_v2,
                   "rtype": "device"
                 },
                 "metadata": {
-                  "control_id": button + 1
+                  "control_id": button_number
                 },
                 "button": {
+                        "last_event": event,
                         "button_report": {
                             "updated": self.state["lastupdated"],
-                            "event": "initial_press"
-                        }
+                            "event": event
+                        },
+                        "repeat_interval": 800,
+                        "event_values": [
+                            "initial_press",
+                            "repeat",
+                            "short_release",
+                            "long_release",
+                            "long_press"
+                        ]
                     },
                 "type": "button"
               })
@@ -316,20 +361,28 @@ class Sensor():
     def getRotary(self):
         result = []
         if self.modelid == "RDM002" and self.type == "ZLLRelativeRotary":
+            device_id = self.parent_id_v2 if self.parent_id_v2 else self.id_v2
+            raw_direction = self.state.get("direction", "clock_wise")
+            direction = "counter_clock_wise" if raw_direction in ("left", "counter_clock_wise") else "clock_wise"
             result.append({
-                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'relative_rotary')),
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, device_id + 'relative_rotary')),
                 "id_v1": "/sensors/" + self.id_v1,
                 "owner": {
-                  "rid": self.id_v2,
+                  "rid": device_id,
                   "rtype": "device"
                 },
-                "rotary_report": {
-                    "updated": self.state["lastupdated"],
-                    "action": "start" if self.state["rotaryevent"] == 1 else "repeat",
-                    "rotation": {
-                        "direction": "right",#self.state["direction"],
-                        "steps": self.state["expectedrotation"],
-                        "duration": self.state["expectedeventduration"]
+                "metadata": {
+                  "control_id": 0
+                },
+                "relative_rotary": {
+                    "rotary_report": {
+                        "updated": self.state["lastupdated"],
+                        "action": "start" if self.state["rotaryevent"] == 1 else "repeat",
+                        "rotation": {
+                            "direction": direction,
+                            "steps": self.state["expectedrotation"],
+                            "duration": self.state["expectedeventduration"]
+                        }
                     }
                 },
                 "type": "relative_rotary"
@@ -338,6 +391,8 @@ class Sensor():
 
     def getDevicePower(self):
         result = None
+        if self.type == "ZLLRelativeRotary":
+            return None
         if "battery" in self.config:
             result = {
                 "id": str(uuid.uuid5(
@@ -385,4 +440,6 @@ class Sensor():
         result["swversion"]=self.swversion
         result["protocol"]=self.protocol
         result["protocol_cfg"]=self.protocol_cfg
+        if self.parent_id_v2:
+            result["parent_id_v2"]=self.parent_id_v2
         return result

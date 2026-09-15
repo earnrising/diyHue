@@ -29,7 +29,7 @@ def get_key():
         # generate a new user for the web interface
         username = str(uuid.uuid1()).replace('-', '')
         bridgeConfig["apiUsers"][username] = ApiUser.ApiUser(username, 'WebUi', None)
-        configManager.bridgeConfig.save_config()
+        configManager.bridgeConfig.mark_dirty("config")
     return list(bridgeConfig["apiUsers"])[0]
 
 @core.route('/lights')
@@ -63,6 +63,8 @@ def get_light_types():
         bridgeConfig["lights"][lightId].modelid = modelId
         bridgeConfig["lights"][lightId].state = lightTypes[modelId]["state"]
         bridgeConfig["lights"][lightId].config = lightTypes[modelId]["config"]
+        if modelId in ["LCX002", "915005987201", "LCX004", "LCX006"]:
+            bridgeConfig["lights"][lightId].protocol_cfg["points_capable"] = 5
         return "success"
 
 @core.route('/tradfri', methods=['POST'])
@@ -93,6 +95,14 @@ def save_config():
 def reset_config():
     configManager.bridgeConfig.reset_config()
     return "config reset\n"
+
+@core.route('/remove_cert')
+@flask_login.login_required
+def remove_cert():
+    configManager.bridgeConfig.remove_cert()
+    logging.info("restart " + str(sys.executable) + " with args : " + str(sys.argv))
+    os.execl(sys.executable, sys.executable, *sys.argv)
+    return "Certificate removed, restart python with args"
 
 @core.route('/restore_config')
 @flask_login.login_required

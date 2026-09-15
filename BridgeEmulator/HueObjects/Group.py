@@ -15,11 +15,12 @@ class Group():
         self.id_v2 = data["id_v2"] if "id_v2" in data else genV2Uuid()
         if "owner" in data:
             self.owner = data["owner"]
-        self.icon_class = data["class"] if "class" in data else "Other"
+        self.icon_class = data["class"] if "class" in data else data["icon_class"] if "icon_class" in data else "Other"
         self.lights = []
         self.action = {"on": False, "bri": 100, "hue": 0, "sat": 254, "effect": "none", "xy": [
             0.0, 0.0], "ct": 153, "alert": "none", "colormode": "xy"}
         self.sensors = []
+        self.device_children = list(data["device_children"]) if "device_children" in data else []
         self.type = data["type"] if "type" in data else "LightGroup"
         self.state = {"all_on": False, "any_on": False}
         self.dxState = {"all_on": None, "any_on": None}
@@ -86,11 +87,18 @@ class Group():
         StreamEvent(streamMessage)
         groupChildrens = []
         groupServices = []
+        seen_child_ids = set()
         for light in self.lights:
             if light():
-                groupChildrens.append(
-                    {"rid": light().getDevice()["id"], "rtype": "device"})
+                dev_id = light().getDevice()["id"]
+                if dev_id not in seen_child_ids:
+                    seen_child_ids.add(dev_id)
+                    groupChildrens.append({"rid": dev_id, "rtype": "device"})
                 groupServices.append({"rid": light().id_v2, "rtype": "light"})
+        for dev_id in self.device_children:
+            if dev_id not in seen_child_ids:
+                seen_child_ids.add(dev_id)
+                groupChildrens.append({"rid": dev_id, "rtype": "device"})
         groupServices.append({"rid": self.id_v2, "rtype": "grouped_light"})
         streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "data": [{"children": groupChildrens, "id": elementId, "id_v1": "/groups/" + self.id_v1, "services": groupServices, "type": elementType}],
@@ -117,27 +125,30 @@ class Group():
 
         streamMessage = {"creationtime": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "data": [self.getV2Room() if self.type == "Room" else self.getV2Zone()],
-                         "owner": {
-            "rid": self.getV2Room()["id"] if self.type == "Room" else self.getV2Zone()["id"],
-            "rtype": "room" if self.type == "Room" else "zone"
-        },
-            "id": str(uuid.uuid4()),
-            "type": "update"
-        }
+                         "id": str(uuid.uuid4()),
+                         "type": "update"
+                         }
         StreamEvent(streamMessage)
 
     def update_state(self):
         all_on = True
         any_on = False
+        bri = 0
+        lights_on = 0
         if len(self.lights) == 0:
             all_on = False
         for light in self.lights:
             if light():
-                if light().state["on"]:
+                if "on" in light().state and light().state["on"]:
                     any_on = True
+                    if "bri" in light().state:
+                        bri = bri + light().state["bri"]
+                        lights_on = lights_on + 1
                 else:
                     all_on = False
-        return {"all_on": all_on, "any_on": any_on}
+        if any_on:
+            bri = (((bri/lights_on)/254)*100) if bri > 0 else 0
+        return {"all_on": all_on, "any_on": any_on, "avr_bri": int(bri)}
 
     def setV2Action(self, state):
         v1State = v2StateToV1(state)
@@ -150,17 +161,30 @@ class Group():
         self.genStreamEvent(v2State)
 
     def genStreamEvent(self, v2State):
-        for light in self.lights:
-            if light():
-                streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                 "data": [{"id": light().id_v2, "id_v1": "/lights/" + light().id_v1, "owner": {"rid": light().getDevice()["id"], "rtype":"device"}, "type": "light"}],
+        streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                               "data": [],
                                  "id": str(uuid.uuid4()),
                                  "type": "update"
                                  }
-                streamMessage["data"][0].update(v2State)
-                StreamEvent(streamMessage)
+        for num, light in enumerate(self.lights):
+            if light():
+                streamMessage["data"].insert(num,{
+                    "id": light().id_v2,
+                    "id_v1": "/lights/" + light().id_v1,
+                    "owner": {
+                        "rid": light().getDevice()["id"],
+                        "rtype":"device"
+                    },
+                    "service_id": light().protocol_cfg["light_nr"]-1 if "light_nr" in light().protocol_cfg else 0,
+                    "type": "light"
+                })
+                streamMessage["data"][num].update(v2State)
+        StreamEvent(streamMessage)
+
+        if "on" in v2State:
+            v2State["dimming"] = {"brightness": self.update_state()["avr_bri"]}
         streamMessage = {"creationtime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                         "data": [{"id": self.id_v2, "type": "grouped_light",
+                         "data": [{"id": self.id_v2,"id_v1": "/groups/" + self.id_v1, "type": "grouped_light",
                                    "owner": {
                                        "rid": self.getV2Room()["id"] if self.type == "Room" else self.getV2Zone()["id"],
                                        "rtype": "room" if self.type == "Room" else "zone"
@@ -169,7 +193,6 @@ class Group():
                          "id": str(uuid.uuid4()),
                          "type": "update"
                          }
-        streamMessage["id_v1"] = "/groups/" + self.id_v1
         streamMessage["data"][0].update(v2State)
         StreamEvent(streamMessage)
 
@@ -197,37 +220,48 @@ class Group():
             result["lightlevel"] = {"state": {"dark": None, "dark_all": None, "daylight": None, "daylight_any": None,
                                               "lightlevel": None, "lightlevel_min": None, "lightlevel_max": None, "lastupdated": "none"}}
         else:
-            result["class"] = self.icon_class.capitalize()
+            result["class"] = self.icon_class.capitalize() if len(self.icon_class) > 2 else self.icon_class.upper()
         result["action"] = self.action
         return result
 
     def getV2Room(self):
-        result = {"children": [], "grouped_services": [], "services": []}
+        result = {"children": [], "services": []}
+        seen_device_ids = set()
+        seen_service_ids = set()
         for light in self.lights:
             if light():
+                dev_id = light().getDevice()["id"]
+                if dev_id not in seen_device_ids:
+                    seen_device_ids.add(dev_id)
+                    result["children"].append({
+                        "rid": dev_id,
+                        "rtype": "device"
+                    })
+                svc_id = light().id_v2
+                if svc_id not in seen_service_ids:
+                    seen_service_ids.add(svc_id)
+                    result["services"].append({
+                        "rid": svc_id,
+                        "rtype": "light"
+                    })
+        for dev_id in self.device_children:
+            if dev_id not in seen_device_ids:
+                seen_device_ids.add(dev_id)
                 result["children"].append({
-                    "rid": str(uuid.uuid5(
-                        uuid.NAMESPACE_URL, light().id_v2 + 'device')),
+                    "rid": dev_id,
                     "rtype": "device"
                 })
 
-        result["grouped_services"].append({
-            "rid": self.id_v2,
-            "rtype": "grouped_light"
-
-        })
+        #result["grouped_services"].append({
+        #    "rid": self.id_v2,
+        #    "rtype": "grouped_light"
+        #})
         result["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'room'))
         result["id_v1"] = "/groups/" + self.id_v1
         result["metadata"] = {
             "archetype": self.icon_class.replace(" ", "_").replace("'", "").lower(),
             "name": self.name
         }
-        for light in self.lights:
-            if light():
-                result["services"].append({
-                    "rid": light().id_v2,
-                    "rtype": "light"
-                })
 
         result["services"].append({
             "rid": self.id_v2,
@@ -238,7 +272,7 @@ class Group():
         return result
 
     def getV2Zone(self):
-        result = {"children": [], "grouped_services": [], "services": []}
+        result = {"children": [], "services": []}
         for light in self.lights:
             if light():
                 result["children"].append({
@@ -246,11 +280,10 @@ class Group():
                     "rtype": "light"
                 })
 
-        result["grouped_services"].append({
-            "rid": self.id_v2,
-            "rtype": "grouped_light"
-
-        })
+        #result["grouped_services"].append({
+        #    "rid": self.id_v2,
+        #    "rtype": "grouped_light"
+        #})
         result["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'zone'))
         result["id_v1"] = "/groups/" + self.id_v1
         result["metadata"] = {
@@ -280,7 +313,7 @@ class Group():
             ]
         }
         result["color"] = {}
-        result["dimming"] = {}
+        result["dimming"] = {"brightness": self.update_state()["avr_bri"]}
         result["dimming_delta"] = {}
         result["dynamics"] = {}
         result["id"] = self.id_v2
@@ -291,6 +324,9 @@ class Group():
             result["owner"] = {"rid": self.owner.username, "rtype": "device"}
         else:
             result["owner"] = {"rid": self.id_v2, "rtype": "device"}
+        result["signaling"] = {"signal_values": [
+            "no_signal",
+            "on_off"]}
 
         return result
 
@@ -299,7 +335,8 @@ class Group():
 
     def save(self):
         result = {"id_v2": self.id_v2, "name": self.name, "class": self.icon_class,
-                  "lights": [], "action": self.action, "type": self.type}
+                  "lights": [], "action": self.action, "type": self.type,
+                  "device_children": self.device_children}
         if hasattr(self, "owner"):
             result["owner"] = self.owner.username
         for light in self.lights:

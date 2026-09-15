@@ -1,25 +1,30 @@
 # This image just moves the correct bins to a specific folder.
 # Can also be used to compile the binaries (for an even better experience)
-FROM busybox as binselector
+FROM busybox AS binselector
 WORKDIR /opt/hue-emulator
 
 # Architecture automatically set by docker eg. linux/amd64, linux/arm/v7, linux/arm64
 ARG TARGETPLATFORM
 
 # ============================ Actual image from here ====================
-FROM debian:stable-slim as prod
+FROM debian:stable-slim AS prod
 WORKDIR /opt/hue-emulator
 ARG TARGETPLATFORM
 
 COPY requirements.txt ./
 
 ## Install requirements
+# Use get-pip.py instead of apt's python3-pip/setuptools: Debian's setuptools
+# pulls python3-typeguard, whose postinst segfaults under QEMU (linux/arm64 CI).
+# --ignore-installed: pip cannot uninstall Debian's typing_extensions (no RECORD).
 RUN apt update \
     && apt install --no-install-recommends -y \
-        curl unzip python3-minimal python3-pip python3-dev python3-setuptools gcc \
+        ca-certificates curl unzip python3-minimal python3-dev gcc \
         openssl nmap psmisc iproute2 bluez bluetooth libcoap3-bin faketime \
-    && pip3 install -r requirements.txt --no-cache-dir --break-system-packages \
-    && apt purge -y python3-pip python3-setuptools python3-dev gcc \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --break-system-packages \
+    && python3 -m pip install -r requirements.txt --no-cache-dir --break-system-packages --ignore-installed \
+    && python3 -m pip uninstall -y pip setuptools wheel --break-system-packages \
+    && apt purge -y python3-dev gcc \
     && apt autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
@@ -40,8 +45,8 @@ RUN curl -sL https://github.com/diyhue/diyHueUI/releases/latest/download/DiyHueU
     && mkdir diyhueUI \
     && unzip -qo diyHueUI.zip -d diyhueUI \
     && rm diyHueUI.zip \
-    && mv diyhueUI/index.html flaskUI/templates/ \
-    && cp -r diyhueUI/static flaskUI/ \
+    && mv diyhueUI/dist/index.html flaskUI/templates/ \
+    && cp -r diyhueUI/dist/assets flaskUI/ \
     && rm -r diyhueUI
 
 ## Copy correct (compiled) C file from previous image
